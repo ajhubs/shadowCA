@@ -8,6 +8,9 @@
 #  for Web services
 #########
 
+# created files (the CA key above all) are only readable by the owner
+umask 077
+
 WPATH=$( pwd )
 # Check if we find the configuration in the current path
 [ -f "${WPATH}"/shadowCA.cfg ]  && CFGPATH="${WPATH}"
@@ -19,7 +22,7 @@ WPATH=$( echo "${WPATH}" | sed -e 's#/bin$##g' )
 
 # if no config is found 
 # we have no base dir and exit 
-[ -d "${CFGPATH}" ] || exit 1
+[ -d "${CFGPATH}" ] || { echo "shadowCA.cfg not found, run this from the shadowCA folder or its bin folder" >&2; exit 1; }
 
 # remove unwanted from cfg file
 # that might harm and is not wanted
@@ -42,43 +45,56 @@ if [ -z "${SSLBIN}" ]; then
   exit 1;
 fi
 
-# Check if CA Key is already present
-[ -f "${CACERTDIR}/${CANAME}.key" ] && echo -e "Error \n shadowCA Key already present \n Will stop creating a new key" && exit 1; 
+# Check if CA Key or Certificate is already present
+if [ -f "${CACERTDIR}/${CANAME}.key" ] || [ -f "${CACERTDIR}/${CANAME}.pem" ]; then
+  echo -e "Error \n shadowCA Key or Certificate already present \n Will stop creating a new CA"
+  exit 1;
+fi
+
+# remove what this run created
+# so it can simply be started again
+fail() {
+  echo -e "\nError: $1 \n" >&2
+  rm -f "${CACERTDIR}/${CANAME}".{cnf,key,pem,der}
+  exit 1;
+}
 
 # create CA Folder if not present
-[ -d "${CACERTDIR}" ] || mkdir -p ${CACERTDIR}
+[ -d "${CACERTDIR}" ] || mkdir -p "${CACERTDIR}"
 
 # write the configuration for your CA
 # that will be used to create
 # In addition later it is possible to check
 # what settings are used.
-cat >> "${CACERTDIR}"/"${CANAME}".cnf <<EOF
+# C, ST, L and emailAddress are only added if set in shadowCA.cfg
+cat > "${CACERTDIR}"/"${CANAME}".cnf <<EOF
 [ req ]
 prompt = no
 distinguished_name = req_distinguished_name
 
 [ req_distinguished_name ]
-C = ${CACOUNTRY}
-ST = ${CASTATE}
-L = ${CACITY}
+$( [ -n "${CACOUNTRY}" ] && echo "C = ${CACOUNTRY}" )
+$( [ -n "${CASTATE}" ] && echo "ST = ${CASTATE}" )
+$( [ -n "${CACITY}" ] && echo "L = ${CACITY}" )
 O = ${CANAME}
 OU = Support ${CANAME}
-CN = ${CANAME} (by jalogisch)
-emailAddress = ${CAMAIL}
+CN = ${CANAME}
+$( [ -n "${CAMAIL}" ] && echo "emailAddress = ${CAMAIL}" )
 EOF
 
 
 # generate private key
 echo -e "\nGenerate Private Key ... \n choose a strong CA Password if requested!! \n"
-"${SSLBIN}" genrsa -des3 -out "${CACERTDIR}"/"${CANAME}".key 2048
+"${SSLBIN}" genrsa -des3 -out "${CACERTDIR}"/"${CANAME}".key 2048 || fail "could not create the CA key (pass phrases did not match?)"
 
 # generate root certificate
+# keyUsage is needed for strict verification (e.g. Python 3.13+)
 echo -e  "\nSign ROOT Certificate with your previous entered CA Password ... \n "
-"${SSLBIN}" req -addext basicConstraints=critical,CA:TRUE,pathlen:1 -x509 -new -nodes -key "${CACERTDIR}"/"${CANAME}".key -sha256 -days "${CAVDAYS}" -config "${CACERTDIR}"/"${CANAME}".cnf -out "${CACERTDIR}"/"${CANAME}".pem
+"${SSLBIN}" req -addext basicConstraints=critical,CA:TRUE,pathlen:1 -addext keyUsage=critical,keyCertSign,cRLSign -x509 -new -nodes -key "${CACERTDIR}"/"${CANAME}".key -sha256 -days "${CAVDAYS}" -config "${CACERTDIR}"/"${CANAME}".cnf -out "${CACERTDIR}"/"${CANAME}".pem || fail "could not create the CA certificate (wrong pass phrase?)"
 
 # create DER from ca.pem
 echo -e "\nCreate DER from ${CACERTDIR}/${CANAME}.pem "
-"${SSLBIN}" x509 -in "${CACERTDIR}"/"${CANAME}".pem -inform pem -out "${CACERTDIR}"/"${CANAME}".der -outform der
+"${SSLBIN}" x509 -in "${CACERTDIR}"/"${CANAME}".pem -inform pem -out "${CACERTDIR}"/"${CANAME}".der -outform der || fail "could not create the DER copy of the CA certificate"
 
 echo "Success"
 echo -e "now you can Import\n ${CACERTDIR}/${CANAME}.pem or\n ${CACERTDIR}/${CANAME}.der\ninto your Systems Truststore\n"

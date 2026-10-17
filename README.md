@@ -21,7 +21,7 @@ Clone this repository on a host that should hold your CA:
      git clone https://github.com/graylog-labs/shadowCA.git
 
 ### Create your CA
-Some settings can be changed in the `shadowCA.cfg` file to fit your environment. After that run `create_ca_certificate.sh` to create your certificate authority
+Some settings can be changed in the `shadowCA.cfg` file to fit your environment. Country, state, city and mail address are optional and only added to the certificate subject if set. After that run `create_ca_certificate.sh` to create your certificate authority
 
     bash bin/create_ca_certificate.sh
 
@@ -37,18 +37,18 @@ Generating RSA private key, 2048 bit long modulus
 ........+++
 ..............................+++
 e is 65537 (0x10001)
-Enter pass phrase for /Users/jd/bench/shadowCA/cert/CA/shadowCA.key:
-Verifying - Enter pass phrase for /Users/jd/bench/shadowCA/cert/CA/shadowCA.key:
+Enter pass phrase for /opt/shadowCA/cert/CA/shadowCA.key:
+Verifying - Enter pass phrase for /opt/shadowCA/cert/CA/shadowCA.key:
 
 Sign ROOT Certificate with your previous entered CA Password ...
 
-Enter pass phrase for /Users/jd/bench/shadowCA/cert/CA/shadowCA.key:
+Enter pass phrase for /opt/shadowCA/cert/CA/shadowCA.key:
 
-Create DER from /Users/jd/bench/shadowCA/cert/CA/shadowCA.pem
+Create DER from /opt/shadowCA/cert/CA/shadowCA.pem
 Success
 now you can Import
- /Users/jd/bench/shadowCA/cert/CA/shadowCA.pem or
- /Users/jd/bench/shadowCA/cert/CA/shadowCA.der
+ /opt/shadowCA/cert/CA/shadowCA.pem or
+ /opt/shadowCA/cert/CA/shadowCA.der
 into your Systems Truststore
 
 This is needed on all System that should trust this CA.
@@ -89,7 +89,9 @@ With just the single command `create_certificate.sh` you are able to create now 
       -d  (optional) Number of Days the certificate is valid (default=365)
 ``` 
 
-The first provided hostname will be used as _common name_ and all additional will be used as _alternative names_. By default `127.0.0.1` is added as IP _alternative name_ and additional IPs can be added too.
+The first provided hostname will be used as _common name_ and all additional will be used as _alternative names_. If no IP is given with `-i`, `127.0.0.1` is added as IP _alternative name_.
+
+A wildcard like `*.example.com` can be used as hostname too, its files are stored in `cert/wildcard.example.com`. All files are only readable by your user, as the `.key` and the `.pem` (certificate and key in one file) contain the private key.
 
 Succesfull run could look like the following
 
@@ -97,7 +99,7 @@ Succesfull run could look like the following
 bash bin/create_certificate.sh -h nuci3.local.lan -h nuci3.lan -h nuci3.local
 Config file is unclean, cleaning it...
 
-Created /Users/jd/bench/shadowCA/cert/nuci3.local.lan ...
+Created /opt/shadowCA/cert/nuci3.local.lan ...
 ... create private Key for nuci3.local.lan
 Generating RSA private key, 2048 bit long modulus
 ...........................................................................................................................................................................+++
@@ -108,26 +110,25 @@ e is 65537 (0x10001)
 ... prepare sign of nuci3.local.lan request ...
 ... sign of nuci3.local.lan request ...
 Signature ok
-subject=/C=DE/ST=NRW/L=Herne/O=shadowCA/OU=Support shadowCA/CN=nuci3.local.lan/emailAddress=jd@jalogis.ch
+subject=/O=shadowCA/OU=Support shadowCA/CN=nuci3.local.lan
 Getting CA Private Key
-Enter pass phrase for /Users/jd/bench/shadowCA/cert/CA/shadowCA.key:
-created /Users/jd/bench/shadowCA/cert/nuci3.local.lan/nuci3.local.lan that contains all needed files
+Enter pass phrase for /opt/shadowCA/cert/CA/shadowCA.key:
+created /opt/shadowCA/cert/nuci3.local.lan/nuci3.local.lan that contains all needed files
 
 total 48
-drwxr-xr-x  8 jd  staff   256 12 Feb 13:40 .
-drwxr-xr-x  5 jd  staff   160 12 Feb 13:40 ..
--rw-r--r--  1 jd  staff   203 12 Feb 13:40 nuci3.local.lan.cnf
--rw-r--r--  1 jd  staff  1712 12 Feb 13:40 nuci3.local.lan.crt
--rw-r--r--  1 jd  staff  1062 12 Feb 13:40 nuci3.local.lan.csr
--rw-r--r--  1 jd  staff   221 12 Feb 13:40 nuci3.local.lan.ext
--rw-r--r--  1 jd  staff  1675 12 Feb 13:40 nuci3.local.lan.key
--rw-r--r--  1 jd  staff  3387 12 Feb 13:40 nuci3.local.lan.pem
+drwx------  8 user  staff   256 12 Feb 13:40 .
+drwx------  5 user  staff   160 12 Feb 13:40 ..
+-rw-------  1 user  staff   203 12 Feb 13:40 nuci3.local.lan.cnf
+-rw-------  1 user  staff  1712 12 Feb 13:40 nuci3.local.lan.crt
+-rw-------  1 user  staff  1062 12 Feb 13:40 nuci3.local.lan.csr
+-rw-------  1 user  staff   221 12 Feb 13:40 nuci3.local.lan.ext
+-rw-------  1 user  staff  1675 12 Feb 13:40 nuci3.local.lan.key
+-rw-------  1 user  staff  3387 12 Feb 13:40 nuci3.local.lan.pem
 ``` 
 
 
 ## Missing
 
-- error handling for certificate creation (wrong password)
 - create a java keystore that can be used
 - revoke certificates
 - renew certificates

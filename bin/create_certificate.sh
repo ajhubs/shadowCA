@@ -5,8 +5,10 @@
 #
 # The variable CRTNAME should be set with the needed/wanted certificate name.
 # If needed additional alt_names should be set and the settings might be adjusted.
-# 
+#
 
+# created files (the private keys above all) are only readable by the owner
+umask 077
 
 WPATH=$( pwd )
 # Check if we find the configuration in the current path
@@ -19,7 +21,7 @@ WPATH=$( echo "${WPATH}" | sed -e 's#/bin$##g' )
 
 # if no config is found 
 # we have no base dir and exit 
-[ -d "${CFGPATH}" ] || exit 1
+[ -d "${CFGPATH}" ] || { echo "shadowCA.cfg not found, run this from the shadowCA folder or its bin folder" >&2; exit 1; }
 
 # remove unwanted from cfg file
 # that might harm and is not wanted
@@ -77,6 +79,15 @@ if [ -z "${HNAME}" ]; then
   exit 1;
 fi
 
+# only plain hostnames, optionally with a leading wildcard (*.example.com)
+HNAME_RE='^(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9])?$'
+for h in "${HNAME[@]}"; do
+  if ! [[ ${h} =~ ${HNAME_RE} ]]; then
+    echo "invalid hostname: ${h}";
+    exit 1;
+  fi
+done
+
 # set localhost IP if no other set
 if [ -z "${HIP}" ]; then
   HIP+=(127.0.0.1)
@@ -89,8 +100,9 @@ fi
 
 
 # sort array entries and make them uniq
-NAMES=($(printf "DNS:%q\n" "${HNAME[@]}" | sort -u))
-IPADD=($(printf "IP:%q\n" "${HIP[@]}" | sort -u))
+# read line by line, so a wildcard (*.example.com) is kept as it is
+NAMES=(); while IFS= read -r n; do NAMES+=("${n}"); done < <(printf "DNS:%s\n" "${HNAME[@]}" | sort -u)
+IPADD=(); while IFS= read -r n; do IPADD+=("${n}"); done < <(printf "IP:%s\n" "${HIP[@]}" | sort -u)
 
 # print each elemet of both arrays with comma seperator
 # and create a string from the array content
@@ -103,18 +115,19 @@ SUBALT=$(IFS=','; echo "${NAMES[*]},${IPADD[*]}")
 
 # The first provided Hostname will be used
 # as reference as this must be the identifier
+# the first name will taken as the name
+# (a wildcard is stored as wildcard.example.com)
+CRTNAME=${HNAME//\*/wildcard}
+WDIR=${CERTDIR}/${CRTNAME}
 
-# abort if cert dir is present 
+# abort if cert dir is present
 # or create dir
-if [ -d "${CERTDIR}/${HNAME}" ];then 
-	echo -e "Looks like ${HNAME} has already a certificate\n ${CERTDIR}/${HNAME} present \n ABORT now"
+if [ -d "${WDIR}" ];then
+	echo -e "Looks like ${HNAME} has already a certificate\n ${WDIR} present \n ABORT now"
 	exit 1;
 else
-	mkdir -p "${CERTDIR}/${HNAME}" || { echo "error creating cert dir"; exit 1;}
-	echo "Created ${CERTDIR}/${HNAME} ..."
-	WDIR=${CERTDIR}/${HNAME}
-	# the first name will taken as the name
-	CRTNAME=${HNAME}
+	mkdir -p "${WDIR}" || { echo "error creating cert dir"; exit 1;}
+	echo "Created ${WDIR} ..."
 fi
 
 if [ -z "${WDIR}" ]; then
@@ -127,51 +140,63 @@ if [ -z "${CRTNAME}" ]; then
   exit 1;
 fi
 
+# remove the files of this run
+# so it can simply be started again
+fail() {
+  echo -e "\nError: $1 \n" >&2
+  rm -f "${WDIR}/${CRTNAME}".{key,cnf,csr,ext,crt,pem}
+  rmdir "${WDIR}"
+  exit 1;
+}
+
 echo "... create private Key for ${CRTNAME}"
 # create private key for server
-${SSLBIN} genrsa -out ${WDIR}/${CRTNAME}.key ${CRTBIT}
+"${SSLBIN}" genrsa -out "${WDIR}/${CRTNAME}.key" "${CRTBIT}" || fail "could not create the private key"
 
 
-echo "... write configuration for ${CRTNAME} ..." 
+echo "... write configuration for ${CRTNAME} ..."
 # The following settings might be adjusted to your needs
-cat >> ${WDIR}/${CRTNAME}.cnf <<EOF
+# C, ST, L and emailAddress are only added if set in shadowCA.cfg
+cat > "${WDIR}/${CRTNAME}.cnf" <<EOF
 [ req ]
 prompt = no
 distinguished_name = req_distinguished_name
 
 [ req_distinguished_name ]
-C = ${CACOUNTRY}
-ST = ${CASTATE}
-L = ${CACITY}
+$( [ -n "${CACOUNTRY}" ] && echo "C = ${CACOUNTRY}" )
+$( [ -n "${CASTATE}" ] && echo "ST = ${CASTATE}" )
+$( [ -n "${CACITY}" ] && echo "L = ${CACITY}" )
 O = ${CANAME}
 OU = Support ${CANAME}
-CN = ${CRTNAME}
-emailAddress = ${CAMAIL}
+CN = ${HNAME}
+$( [ -n "${CAMAIL}" ] && echo "emailAddress = ${CAMAIL}" )
 EOF
 
 
 echo "... create Certificate Request for ${CRTNAME} ..."
 # create csr
-${SSLBIN} req -new -config ${WDIR}/${CRTNAME}.cnf -key ${WDIR}/${CRTNAME}.key -out ${WDIR}/${CRTNAME}.csr
+"${SSLBIN}" req -new -config "${WDIR}/${CRTNAME}.cnf" -key "${WDIR}/${CRTNAME}.key" -out "${WDIR}/${CRTNAME}.csr" || fail "could not create the certificate request"
 
 
 echo "... prepare sign of ${CRTNAME} request ..."
 # create .ext file
 # alt_names are added here
-cat << EOF > ${WDIR}/${CRTNAME}.ext
+# extendedKeyUsage is required by macOS/iOS, clientAuth keeps mutual TLS working
+cat << EOF > "${WDIR}/${CRTNAME}.ext"
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth, clientAuth
 subjectAltName = ${SUBALT}
 EOF
 
 echo "... sign of ${CRTNAME} request ..."
 # create the certificate
-${SSLBIN} x509 -req -in ${WDIR}/${CRTNAME}.csr -CA "${CACERTDIR}"/"${CANAME}".pem -CAkey "${CACERTDIR}"/"${CANAME}".key -CAcreateserial -out ${WDIR}/${CRTNAME}.crt -days "${VALIDDAYS}" -sha256 -extfile ${WDIR}/${CRTNAME}.ext
+"${SSLBIN}" x509 -req -in "${WDIR}/${CRTNAME}.csr" -CA "${CACERTDIR}"/"${CANAME}".pem -CAkey "${CACERTDIR}"/"${CANAME}".key -CAcreateserial -out "${WDIR}/${CRTNAME}.crt" -days "${VALIDDAYS}" -sha256 -extfile "${WDIR}/${CRTNAME}.ext" || fail "could not sign the certificate (wrong CA pass phrase?)"
 # create certificate pem
-# or fullchain certificate
-cat ${WDIR}/${CRTNAME}.crt ${WDIR}/${CRTNAME}.key > ${WDIR}/${CRTNAME}.pem
+# that contains certificate and key
+cat "${WDIR}/${CRTNAME}.crt" "${WDIR}/${CRTNAME}.key" > "${WDIR}/${CRTNAME}.pem" || fail "could not create ${CRTNAME}.pem"
 
 echo "created ${WDIR}/${CRTNAME} that contains all needed files"
 echo ""
-ls -la ${WDIR}/
+ls -la "${WDIR}/"
